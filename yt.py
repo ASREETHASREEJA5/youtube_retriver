@@ -1,15 +1,19 @@
 import streamlit as st
 import requests
-import csv
-from dotenv import load_dotenv
+import json
 import os
 
-# Load API key from .env file
-load_dotenv()
-API_KEY = os.getenv('API_KEY')
+API_KEY = 'AIzaSyDNnYA5vexObnFA-1vs_hvBkhBu6TNst00'
 BASE_URL = 'https://www.googleapis.com/youtube/v3/search'
+FEEDBACK_FILE = 'feedback.json'  # File to store feedback
 
-# Function to get video links
+# Initialize session state for video links and feedback
+if 'video_links' not in st.session_state:
+    st.session_state.video_links = []
+if 'feedback' not in st.session_state:
+    st.session_state.feedback = []
+
+# Function to fetch YouTube video links
 def get_video_links(question):
     params = {
         'part': 'snippet',
@@ -18,90 +22,77 @@ def get_video_links(question):
         'type': 'video',
         'maxResults': 5
     }
-
     response = requests.get(BASE_URL, params=params)
     data = response.json()
 
+    if 'error' in data:
+        st.error(f"Error: {data['error']}")
+        return []
+
+    if 'items' not in data:
+        st.warning("No items found in the response.")
+        return []
+
     video_links = []
-    for item in data.get('items', []):
+    for item in data['items']:
         video_id = item['id']['videoId']
         video_url = f'https://www.youtube.com/watch?v={video_id}'
         video_links.append(video_url)
 
     return video_links
 
-# Function to save feedback to CSV
-def save_feedback_to_csv(video_feedback):
-    file_name = "feedback_data.csv"
-    file_exists = os.path.isfile(file_name)
-    
-    with open(file_name, mode='a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        
-        if not file_exists:
-            writer.writerow(['Video URL', 'Feedback'])
-        
-        for video_url, feedback in video_feedback.items():
-            writer.writerow([video_url, feedback])
+# Function to save feedback
+def save_feedback(video_url, feedback):
+    if not os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, 'w') as f:
+            json.dump([], f)
 
-# Function to load all feedbacks from CSV
-def load_feedback_from_csv():
-    file_name = "feedback_data.csv"
-    feedbacks = []
-    
-    if os.path.isfile(file_name):
-        with open(file_name, mode='r', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            next(reader, None)  # Skip header
-            feedbacks = list(reader)
-    
-    return feedbacks
+    with open(FEEDBACK_FILE, 'r') as f:
+        feedback_data = json.load(f)
 
-# Initialize session state
-if 'feedback_data' not in st.session_state:
-    st.session_state.feedback_data = {}
+    feedback_data.append({'video_url': video_url, 'feedback': feedback})
 
-st.title("YouTube Video Search")
-st.write("Enter a question and get the top 5 YouTube video links related to it.")
+    with open(FEEDBACK_FILE, 'w') as f:
+        json.dump(feedback_data, f)
 
-# Host mode toggle
-is_host = st.checkbox("Host Mode (View All Feedbacks)")
+# Function to retrieve feedback
+def get_feedback():
+    if os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, 'r') as f:
+            return json.load(f)
+    return []
 
-# Input field for question
-question = st.text_input("Ask a question:")
+# Streamlit app
+st.title("YouTube Video Search and Feedback")
 
-if question:
-    videos = get_video_links(question)
-
-    if videos:
-        st.write("Here are some video links related to your question:")
-        for idx, video in enumerate(videos, 1):
-            st.write(f"{idx}. {video}")
-            feedback_key = f"video_{idx}_feedback"
-            
-            if feedback_key not in st.session_state:
-                st.session_state.feedback_data[video] = "Select"
-
-            feedback = st.radio(
-                f"Feedback for video {idx}",
-                ('Select', 'Like', 'Dislike'),
-                key=feedback_key
-            )
-
-            st.session_state.feedback_data[video] = feedback
-
-        if st.button("Save Feedback"):
-            save_feedback_to_csv(st.session_state.feedback_data)
-            st.success("Feedback saved successfully!")
+# Query input
+question = st.text_input("Enter your question:")
+if st.button("Search"):
+    if question:
+        videos = get_video_links(question)
+        st.session_state.video_links = videos
     else:
-        st.write("No videos found.")
+        st.warning("Please enter a question to search.")
 
-# Display all feedbacks only in Host Mode
-if is_host:
-    st.write("Collected Feedbacks:")
-    feedbacks = load_feedback_from_csv()
-    if feedbacks:
-        for feedback in feedbacks:
-            st.write(f"Video: {feedback[0]} | Feedback: {feedback[1]}")
-    else:
-        st.write("No feedbacks available yet.")
+# Display video links and feedback buttons
+if st.session_state.video_links:
+    st.subheader("Video Links:")
+    for video in st.session_state.video_links:
+        st.write(video)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"👍 Like {video}", key=f"like-{video}"):
+                save_feedback(video, "like")
+                st.session_state.feedback.append({'video_url': video, 'feedback': 'like'})
+        with col2:
+            if st.button(f"👎 Dislike {video}", key=f"dislike-{video}"):
+                save_feedback(video, "dislike")
+                st.session_state.feedback.append({'video_url': video, 'feedback': 'dislike'})
+
+# Feedback records
+st.subheader("Feedback Records")
+if st.session_state.feedback:
+    for record in st.session_state.feedback:
+        st.write(f"Video: {record['video_url']} - Feedback: {record['feedback']}")
+else:
+    st.write("No feedback records found.")
